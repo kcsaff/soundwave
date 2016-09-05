@@ -1,6 +1,7 @@
 import array
-import itertools
+from fractions import gcd
 import math
+import six
 from .interpolate import linear as linear_interpolate
 from .dither import dither2
 
@@ -12,10 +13,10 @@ except:
 
 
 class ChannelData(object):
-    def __init__(self, data, samplerate, typecode=None):
+    def __init__(self, samplerate, typecode, data=(), arraytype=None):
         self.samplerate = samplerate
-        self.typecode = typecode or data.typecode
-        self.data = array.array(self.typecode, data)
+        typecode = typecode or data.typecode
+        self.data = (arraytype or array.array)(typecode, data)
 
     def __iter__(self):
         return iter(self.data)
@@ -26,28 +27,51 @@ class ChannelData(object):
     def __len__(self):
         return len(self.data)
 
+    @property
+    def typecode(self):
+        return self.data.typecode
+
+    @property
+    def itemsize(self):
+        return self.data.itemsize
+
+    def append(self, sample):
+        self.data.append(sample)
+
+    def extend(self, samples):
+        self.data.extend(samples)
+
     def convert(self, samplerate=None, typecode=None, interpolate=None, dither=None, force=True):
         samplerate = samplerate or self.samplerate
         typecode = typecode or self.typecode
         if not force and samplerate == self.samplerate and typecode == self.typecode:
             return self
 
-        interpolate = interpolate or linear_interpolate
-
         if self.samplerate == samplerate:
             resample = self.data
             force_digitize = False
         else:
+            interpolate = interpolate or linear_interpolate
             newlen = int(math.ceil(len(self) * samplerate / self.samplerate))
+            if isinstance(self.samplerate, six.integer_types) and \
+                    isinstance(samplerate, six.integer_types):
+                thegcd = gcd(self.samplerate, samplerate)
+                numerator = self.samplerate // thegcd
+                denominator = samplerate // thegcd
+            else:
+                numerator = self.samplerate
+                denominator = samplerate
             resample = (
-                interpolate(self.data, i * self.samplerate, samplerate)
+                interpolate(self.data, i * numerator, denominator)
                 for i in range(newlen)
             )
             force_digitize = True
 
         return self.__class__(
-            convert_typecode(resample, self.typecode, typecode, dither,
-                             force_digitize=force_digitize)
+            convert_typecode(
+                resample, self.typecode, typecode, dither,
+                force_digitize=force_digitize
+            ), samplerate, typecode
         )
 
 
@@ -65,7 +89,7 @@ _TYPES = {
 }
 
 
-def convert_typecode(data, fromtype, totype, dither=None, force_digitize=True):
+def convert_typecode(fromtype, totype, data, dither=None, force_digitize=True):
     if fromtype in 'fd' or totype in 'fd':
         raise NotImplementedError('We don\'t deal in floats yet sorry :(')
     elif fromtype in 'uc' or totype in 'uc':
@@ -94,4 +118,13 @@ def convert_typecode(data, fromtype, totype, dither=None, force_digitize=True):
             return (long(sample + lowdiff) for sample in data)
         else:
             return data
+
+
+class ChannelMixer(object):
+    def __init__(self, samplerate, typecode, interpolate=None, dither=None):
+        self.samplerate = samplerate
+        self.typecode = typecode
+        self.interpolate = interpolate or linear_interpolate
+        self.dither = dither or dither2
+
 
